@@ -1,0 +1,132 @@
+
+.trip-map-section {
+  margin: 32px 0;
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 20px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.trip-map-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.trip-map-heading h2 {
+  margin: 0 0 8px;
+  color: #111827;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.trip-map-heading p {
+  margin: 0;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.trip-map-count {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  color: #4338ca;
+  background: #eef2ff;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.trip-map-container {
+  width: 100%;
+  height: 440px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+}
+
+.trip-map {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+.trip-map-empty {
+  padding: 48px 20px;
+  text-align: center;
+  background: #f9fafb;
+  border: 1px dashed #d1d5db;
+  border-radius: 16px;
+}
+
+.trip-map-empty > span {
+  font-size: 3rem;
+}
+
+.trip-map-empty h3 {
+  margin: 14px 0 8px;
+  color: #111827;
+}
+
+.trip-map-empty p {
+  max-width: 480px;
+  margin: 0 auto;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.trip-map-popup {
+  min-width: 160px;
+  max-width: 240px;
+}
+
+.trip-map-popup strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #111827;
+  font-size: 1rem;
+}
+
+.trip-map-popup p {
+  margin: 6px 0;
+  color: #4b5563;
+  line-height: 1.4;
+}
+
+.trip-map-popup a {
+  display: inline-block;
+  margin-top: 8px;
+  color: #4f46e5;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.trip-map-popup a:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .trip-map-section {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .trip-map-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .trip-map-heading h2 {
+    font-size: 1.3rem;
+  }
+
+  .trip-map-container {
+    height: 350px;
+  }
+
+  .trip-map-count {
+    font-size: 0.8rem;
+  }
+}
