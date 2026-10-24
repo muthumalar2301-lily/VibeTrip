@@ -8,3 +8,10 @@ node_modules/
 dist/
 __pycache__/
 *.py[cod]
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment and editor files
+.vscode/

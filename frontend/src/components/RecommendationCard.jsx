@@ -24,14 +24,9 @@ function RecommendationCard({
   recommendation,
   place,
 }) {
-  // Support both the direct props and the Qloo place object.
   const item = recommendation || place || {};
 
-  const actualName =
-    name ||
-    title ||
-    item.name ||
-    "Recommended Place";
+  const actualName = name || title || item.name || "Recommended Place";
 
   const actualImage =
     image_url ||
@@ -51,9 +46,7 @@ function RecommendationCard({
 
   const actualLocation =
     location ||
-    [city || item.city, country || item.country]
-      .filter(Boolean)
-      .join(", ") ||
+    [city || item.city, country || item.country].filter(Boolean).join(", ") ||
     item.location ||
     "";
 
@@ -66,17 +59,10 @@ function RecommendationCard({
 
   const actualWebsite = website || item.website || "";
 
-  const actualId =
-    id ||
-    item.entity_id ||
-    item.id ||
-    actualName;
-
   const actualLatitude = latitude ?? item.latitude;
   const actualLongitude = longitude ?? item.longitude;
 
   const selectedState = isSelected ?? selected;
-
   const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
@@ -93,12 +79,22 @@ function RecommendationCard({
     ? `${actualLatitude},${actualLongitude}`
     : actualAddress || `${actualName} ${actualLocation}`.trim();
 
+  // Full item reference guaranteed for App.jsx's toggleRecommendation
+  const itemToPass = recommendation || place || {
+    id,
+    name: actualName,
+    image_url: actualImage,
+    travel_category: actualCategory,
+    city: city || item.city,
+    country: country || item.country,
+    address: actualAddress,
+    description: actualDescription,
+    latitude: actualLatitude,
+    longitude: actualLongitude,
+  };
+
   return (
-    <article
-      className={`recommendation-card ${
-        selectedState ? "recommendation-card-selected" : ""
-      }`}
-    >
+    <article className={`recommendation-card ${selectedState ? "recommendation-card-selected" : ""}`}>
       <div className="recommendation-image-container">
         {actualImage && !imageFailed ? (
           <img
@@ -116,14 +112,10 @@ function RecommendationCard({
           </div>
         )}
 
-        <span className="recommendation-category">
-          {actualCategory}
-        </span>
+        <span className="recommendation-category">{actualCategory}</span>
 
         {selectedState && (
-          <span className="recommendation-selected-badge">
-            ✓ Added to My Trip
-          </span>
+          <span className="recommendation-selected-badge">✓ Added</span>
         )}
       </div>
 
@@ -133,20 +125,14 @@ function RecommendationCard({
         </div>
 
         {actualLocation && (
-          <p className="recommendation-location">
-            📍 {actualLocation}
-          </p>
+          <p className="recommendation-location">📍 {actualLocation}</p>
         )}
 
         {actualAddress && actualAddress !== actualLocation && (
-          <p className="recommendation-address">
-            {actualAddress}
-          </p>
+          <p className="recommendation-address">{actualAddress}</p>
         )}
 
-        <p className="recommendation-description">
-          {actualDescription}
-        </p>
+        <p className="recommendation-description">{actualDescription}</p>
 
         {matchReason && (
           <div className="recommendation-match">
@@ -158,13 +144,11 @@ function RecommendationCard({
         <div className="recommendation-card-actions">
           <a
             className="recommendation-map-link"
-            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              mapQuery
-            )}`}
+            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`}
             target="_blank"
             rel="noopener noreferrer"
           >
-            📍 View on Map
+            Map ↗
           </a>
 
           {actualWebsite && (
@@ -174,21 +158,17 @@ function RecommendationCard({
               target="_blank"
               rel="noopener noreferrer"
             >
-              Visit Website ↗
+              Website ↗
             </a>
           )}
         </div>
 
         <button
           type="button"
-          className={`recommendation-select-button ${
-            selectedState ? "is-selected" : ""
-          }`}
-          onClick={() => onSelect && onSelect(actualId)}
+          className={`recommendation-select-button ${selectedState ? "is-selected" : ""}`}
+          onClick={() => onSelect && onSelect(itemToPass)}
         >
-          {selectedState
-            ? "✓ Added to My Trip"
-            : "+ Add to My Trip"}
+          {selectedState ? "✓ Added to My Trip" : "+ Add to My Trip"}
         </button>
       </div>
     </article>
