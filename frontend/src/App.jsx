@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import RecommendationCard from "./components/RecommendationCard";
 import TripMap from "./components/TripMap";
@@ -9,7 +9,7 @@ const STEPS = [
   { id: 1, key: "preferences", title: "Preferences" },
   { id: 2, key: "recommendations", title: "Select Places" },
   { id: 3, key: "itinerary", title: "Itinerary" },
-  { id: 4, key: "budget", title: "Budget" },
+  { id: 4, key: "budget", title: "Budget & Costs" },
 ];
 
 const INITIAL_PREFERENCES = {
@@ -120,7 +120,7 @@ function formatMoney(amount, currencyCode) {
   const symbol = getCurrencySymbol(currencyCode);
   const value = Number(amount);
   if (!Number.isFinite(value)) return `${symbol}0`;
-  return `${symbol}${Math.round(value).toLocaleString("en-IN")}`;
+  return `${symbol}${Math.round(value).toLocaleString()}`;
 }
 
 function splitCommaSeparated(value) {
@@ -284,14 +284,12 @@ export default function App() {
 
   const [budgetItems, setBudgetItems] = useState(() => createInitialBudget(INITIAL_PREFERENCES));
   const [emergencyPercent, setEmergencyPercent] = useState(10);
-  const [prepaidExpenses, setPrepaidExpenses] = useState("");
   const [includeIntercityTransport, setIncludeIntercityTransport] = useState(true);
 
   const [destinationCurrency, setDestinationCurrency] = useState(null);
   const [currencyLookupStatus, setCurrencyLookupStatus] = useState("idle");
   const [exchangeRateInfo, setExchangeRateInfo] = useState(null);
   const [exchangeRateStatus, setExchangeRateStatus] = useState("idle");
-  const [currencyConversionError, setCurrencyConversionError] = useState("");
 
   const [savedTrips, setSavedTrips] = useState(() => {
     try {
@@ -308,7 +306,10 @@ export default function App() {
   }, [savedTrips]);
 
   const currency = preferences.budget_currency || "INR";
+  const destCurrencyCode = destinationCurrency?.currency_code || null;
+  const exchangeRate = exchangeRateInfo?.rate || null;
 
+  // Resolve destination currency
   useEffect(() => {
     const destination = preferences.destination.trim();
     if (destination.length < 2) {
@@ -316,14 +317,12 @@ export default function App() {
       setCurrencyLookupStatus("idle");
       setExchangeRateInfo(null);
       setExchangeRateStatus("idle");
-      setCurrencyConversionError("");
       return undefined;
     }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(async () => {
       setCurrencyLookupStatus("loading");
-      setCurrencyConversionError("");
 
       try {
         const response = await fetch(
@@ -333,7 +332,7 @@ export default function App() {
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.detail || "Could not identify the destination currency.");
+          throw new Error(data.detail || "Could not identify destination currency.");
         }
 
         setDestinationCurrency(data);
@@ -343,7 +342,6 @@ export default function App() {
         setDestinationCurrency(null);
         setCurrencyLookupStatus("error");
         setExchangeRateInfo(null);
-        setCurrencyConversionError(err.message || "Destination currency lookup failed.");
       }
     }, 500);
 
@@ -353,25 +351,23 @@ export default function App() {
     };
   }, [preferences.destination]);
 
+  // Load exchange rate
   useEffect(() => {
-    if (!destinationCurrency?.currency_code) return undefined;
+    if (!destCurrencyCode) return undefined;
 
-    const quoteCurrency = destinationCurrency.currency_code;
     const controller = new AbortController();
-
     async function loadExchangeRate() {
       setExchangeRateStatus("loading");
-      setCurrencyConversionError("");
 
       try {
-        const query = new URLSearchParams({ base: currency, quote: quoteCurrency });
+        const query = new URLSearchParams({ base: currency, quote: destCurrencyCode });
         const response = await fetch(`${API_BASE_URL}/currency/rate?${query.toString()}`, {
           signal: controller.signal,
         });
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.detail || "Could not retrieve the exchange rate.");
+          throw new Error(data.detail || "Could not retrieve exchange rate.");
         }
 
         setExchangeRateInfo(data);
@@ -380,13 +376,49 @@ export default function App() {
         if (err.name === "AbortError") return;
         setExchangeRateInfo(null);
         setExchangeRateStatus("error");
-        setCurrencyConversionError(err.message || "Exchange-rate lookup failed.");
       }
     }
 
     loadExchangeRate();
     return () => controller.abort();
-  }, [currency, destinationCurrency?.currency_code]);
+  }, [currency, destCurrencyCode]);
+
+  // Cost of Living Index (COLI) Comparison
+  const costOfLivingComparison = useMemo(() => {
+    if (!destCurrencyCode || !exchangeRate || destCurrencyCode === currency) {
+      return null;
+    }
+
+    const tier = getDestinationTier(preferences.destination, preferences.travel_style);
+    const originCosts = DAILY_REFERENCE_COSTS[currency] || DAILY_REFERENCE_COSTS.INR;
+    const destCosts = DAILY_REFERENCE_COSTS[destCurrencyCode];
+
+    if (!destCosts) return null;
+
+    const originDailyTotal = Object.values(originCosts[tier]).reduce((a, b) => a + b, 0);
+    const destDailyTotalInDestCurrency = Object.values(destCosts[tier]).reduce((a, b) => a + b, 0);
+    const destDailyTotalInHomeCurrency = destDailyTotalInDestCurrency / exchangeRate;
+
+    const ratio = destDailyTotalInHomeCurrency / originDailyTotal;
+    let label = "Similar living cost";
+    let badgeClass = "col-similar";
+
+    if (ratio >= 1.35) {
+      label = `~${ratio.toFixed(1)}× higher cost of living`;
+      badgeClass = "col-higher";
+    } else if (ratio <= 0.75) {
+      label = `~${(1 / ratio).toFixed(1)}× more affordable`;
+      badgeClass = "col-cheaper";
+    }
+
+    return {
+      ratio,
+      label,
+      badgeClass,
+      originDailyTotal,
+      destDailyTotalInDestCurrency,
+    };
+  }, [currency, destCurrencyCode, exchangeRate, preferences.destination, preferences.travel_style]);
 
   const budgetSummary = useMemo(() => {
     const totalBudget = Math.max(0, Number(preferences.budget) || 0);
@@ -408,7 +440,6 @@ export default function App() {
 
     const baseCost = Object.values(costs).reduce((total, amount) => total + (amount ?? 0), 0);
     const emergencyReserve = Math.ceil((baseCost * emergencyPercent) / 100);
-    const prepaid = Math.max(0, Number(prepaidExpenses) || 0);
     const estimatedTotal = baseCost + emergencyReserve;
     const complete = !missingIntercity && missingCategories.length === 0;
     const remainingBudget = totalBudget - estimatedTotal;
@@ -434,15 +465,12 @@ export default function App() {
       emergencyReserve,
       estimatedTotal,
       remainingBudget,
-      prepaid,
       complete,
-      missingIntercity,
-      missingCategories,
       status,
       statusLabel,
       statusMessage,
     };
-  }, [preferences.budget, budgetItems, emergencyPercent, prepaidExpenses, includeIntercityTransport]);
+  }, [preferences.budget, budgetItems, emergencyPercent, includeIntercityTransport]);
 
   function updatePreference(name, value) {
     setPreferences((prev) => ({ ...prev, [name]: value }));
@@ -474,8 +502,8 @@ export default function App() {
       ["accommodation", "food", "localTransport", "attractions", "shopping"].forEach((key) => {
         const val = Number(prev[key]);
         if (prev[key] !== "" && Number.isFinite(val) && oldTier[key] > 0) {
-          const ratio = newTier[key] / oldTier[key];
-          converted[key] = String(Math.round(val * ratio));
+          const r = newTier[key] / oldTier[key];
+          converted[key] = String(Math.round(val * r));
         } else {
           converted[key] = String(newTier[key] * duration);
         }
@@ -492,7 +520,6 @@ export default function App() {
   function resetBudgetEstimate() {
     setBudgetItems(createInitialBudget(preferences));
     setEmergencyPercent(10);
-    setPrepaidExpenses("");
     setIncludeIntercityTransport(true);
   }
 
@@ -774,28 +801,38 @@ export default function App() {
 
             {/* Currency Auto-Conversion Card */}
             <div className="currency-conversion-card" role="status">
-              <h3>💱 Destination Currency Conversion</h3>
+              <h3>💱 Currency & Living Cost Preview</h3>
               {currencyLookupStatus === "idle" && (
-                <p>Enter a destination to detect local currency and live estimation.</p>
+                <p>Enter a destination to detect local currency and live comparison.</p>
               )}
               {currencyLookupStatus === "loading" && (
-                <p>Detecting destination currency…</p>
+                <p>Detecting destination currency and exchange rates…</p>
               )}
               {currencyLookupStatus === "success" && destinationCurrency && (
-                <>
+                <div className="currency-preview-details">
                   <p>
                     Destination: <strong>{destinationCurrency.country}</strong> · Local Currency:{" "}
                     <strong>{destinationCurrency.currency_code} ({destinationCurrency.currency_symbol})</strong>
                   </p>
                   {exchangeRateStatus === "success" && exchangeRateInfo && (
-                    <p style={{ fontSize: "1.08rem", marginTop: "4px" }}>
+                    <p style={{ fontSize: "1.05rem", marginTop: "4px" }}>
                       <strong>{formatMoney(preferences.budget || 0, currency)}</strong> ≈{" "}
                       <strong>
-                        {formatMoney((Number(preferences.budget) || 0) * exchangeRateInfo.rate, destinationCurrency.currency_code)}
+                        {formatMoney((Number(preferences.budget) || 0) * exchangeRate, destCurrencyCode)}
                       </strong>
+                      <span style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginLeft: "8px" }}>
+                        (1 {exchangeRateInfo.base} = {Number(exchangeRate).toFixed(4)} {exchangeRateInfo.quote})
+                      </span>
                     </p>
                   )}
-                </>
+                  {costOfLivingComparison && (
+                    <div style={{ marginTop: "8px" }}>
+                      <span className={`col-chip ${costOfLivingComparison.badgeClass}`}>
+                        {costOfLivingComparison.label}
+                      </span>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -1012,27 +1049,60 @@ export default function App() {
         </section>
       )}
 
-      {/* ================= STEP 4: BUDGET PLANNER ================= */}
+      {/* ================= STEP 4: BUDGET & COST OF LIVING ================= */}
       {currentStep === 4 && (
         <section className="panel step-panel">
           <div className="section-heading">
             <span className="eyebrow">STEP 4 OF 4</span>
-            <h2>Trip Budget Breakdown 💰</h2>
-            <p>Review and balance your estimates with your overall financial target.</p>
+            <h2>Trip Budget & Living Costs 💰</h2>
+            <p>Compare costs in both your home and destination currencies.</p>
           </div>
 
+          {/* Cost of Living Banner */}
+          {costOfLivingComparison && (
+            <div className="cost-of-living-banner">
+              <div>
+                <strong>Purchasing Power Insight:</strong>
+                <p>
+                  Prices in {preferences.destination} are {costOfLivingComparison.label} compared to typical costs in {preferences.starting_location || "your home city"}.
+                </p>
+              </div>
+              <span className={`col-chip ${costOfLivingComparison.badgeClass}`}>
+                {costOfLivingComparison.label}
+              </span>
+            </div>
+          )}
+
+          {/* Dual Currency Overview Cards */}
           <div className="budget-overview">
             <article className="budget-stat">
               <span>Total Available Budget</span>
               <strong>{formatMoney(budgetSummary.totalBudget, currency)}</strong>
+              {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                <small className="dual-subtext">
+                  ≈ {formatMoney(budgetSummary.totalBudget * exchangeRate, destCurrencyCode)}
+                </small>
+              )}
             </article>
+
             <article className="budget-stat">
               <span>Estimated Cost</span>
-              <strong>{formatMoney(budgetSummary.baseCost, currency)}</strong>
+              <strong>{formatMoney(budgetSummary.estimatedTotal, currency)}</strong>
+              {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                <small className="dual-subtext">
+                  ≈ {formatMoney(budgetSummary.estimatedTotal * exchangeRate, destCurrencyCode)}
+                </small>
+              )}
             </article>
+
             <article className="budget-stat">
               <span>Emergency Reserve ({emergencyPercent}%)</span>
               <strong>{formatMoney(budgetSummary.emergencyReserve, currency)}</strong>
+              {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                <small className="dual-subtext">
+                  ≈ {formatMoney(budgetSummary.emergencyReserve * exchangeRate, destCurrencyCode)}
+                </small>
+              )}
             </article>
           </div>
 
@@ -1042,9 +1112,19 @@ export default function App() {
             {budgetSummary.complete && (
               <p style={{ marginTop: "0.5rem" }}>
                 {budgetSummary.remainingBudget < 0 ? (
-                  <>Shortfall: <strong>{formatMoney(Math.abs(budgetSummary.remainingBudget), currency)}</strong></>
+                  <>
+                    Shortfall: <strong>{formatMoney(Math.abs(budgetSummary.remainingBudget), currency)}</strong>
+                    {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                      <span> ({formatMoney(Math.abs(budgetSummary.remainingBudget) * exchangeRate, destCurrencyCode)})</span>
+                    )}
+                  </>
                 ) : (
-                  <>Surplus remaining: <strong>{formatMoney(budgetSummary.remainingBudget, currency)}</strong></>
+                  <>
+                    Surplus remaining: <strong>{formatMoney(budgetSummary.remainingBudget, currency)}</strong>
+                    {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                      <span> ({formatMoney(budgetSummary.remainingBudget * exchangeRate, destCurrencyCode)})</span>
+                    )}
+                  </>
                 )}
               </p>
             )}
@@ -1052,7 +1132,7 @@ export default function App() {
 
           <div className="budget-editor">
             <div className="budget-editor-heading">
-              <h3>Expense Breakdown</h3>
+              <h3>Expense Breakdown by Category</h3>
               <button type="button" className="secondary-button" onClick={resetBudgetEstimate}>
                 Reset to Standards
               </button>
@@ -1061,6 +1141,9 @@ export default function App() {
             <div className="budget-category-list">
               {BUDGET_CATEGORIES.map((category) => {
                 const isIntercity = category.id === "intercity";
+                const amount = Number(budgetItems[category.id]) || 0;
+                const convertedDestAmount = exchangeRate ? amount * exchangeRate : null;
+
                 return (
                   <article className="budget-category" key={category.id}>
                     <div className="budget-category-description">
@@ -1081,18 +1164,27 @@ export default function App() {
                       )}
                     </div>
 
-                    <label className="budget-input-label">
-                      <span>{currency}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={budgetItems[category.id]}
-                        onChange={(e) => updateBudgetItem(category.id, e.target.value)}
-                        placeholder="0"
-                        disabled={isIntercity && !includeIntercityTransport}
-                      />
-                    </label>
+                    <div className="budget-input-wrapper">
+                      <label className="budget-input-label">
+                        <span>{currency}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={budgetItems[category.id]}
+                          onChange={(e) => updateBudgetItem(category.id, e.target.value)}
+                          placeholder="0"
+                          disabled={isIntercity && !includeIntercityTransport}
+                        />
+                      </label>
+
+                      {/* Real-time local currency conversion pill */}
+                      {convertedDestAmount !== null && destCurrencyCode && destCurrencyCode !== currency && (
+                        <div className="converted-pill">
+                          ≈ {formatMoney(convertedDestAmount, destCurrencyCode)}
+                        </div>
+                      )}
+                    </div>
                   </article>
                 );
               })}
@@ -1117,10 +1209,20 @@ export default function App() {
               <div>
                 <span>Estimated Total (Expenses + Reserve)</span>
                 <strong>{formatMoney(budgetSummary.estimatedTotal, currency)}</strong>
+                {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                  <span style={{ opacity: 0.85, fontSize: "0.95rem" }}>
+                    ≈ {formatMoney(budgetSummary.estimatedTotal * exchangeRate, destCurrencyCode)}
+                  </span>
+                )}
               </div>
               <div>
-                <span>Remaining Net Budget</span>
+                <span>Net Budget Balance</span>
                 <strong>{formatMoney(budgetSummary.remainingBudget, currency)}</strong>
+                {exchangeRate && destCurrencyCode && destCurrencyCode !== currency && (
+                  <span style={{ opacity: 0.85, fontSize: "0.95rem" }}>
+                    ≈ {formatMoney(budgetSummary.remainingBudget * exchangeRate, destCurrencyCode)}
+                  </span>
+                )}
               </div>
             </div>
           </div>

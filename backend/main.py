@@ -1,235 +1,229 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import requests
-from datetime import date
-import re
+import logging
 import os
-from models.preferences import TravelPreferences
-from services.qloo_service import (
-    get_cultural_recommendations,
-)
+from typing import Any, Optional
 
-COUNTRY_CURRENCIES = {
-    "IN": {"country": "India", "code": "INR", "name": "Indian rupee", "symbol": "₹"},
-    "JP": {"country": "Japan", "code": "JPY", "name": "Japanese yen", "symbol": "¥"},
-    "US": {"country": "United States", "code": "USD", "name": "United States dollar", "symbol": "$"},
-    "GB": {"country": "United Kingdom", "code": "GBP", "name": "British pound", "symbol": "£"},
-    "SG": {"country": "Singapore", "code": "SGD", "name": "Singapore dollar", "symbol": "$"},
-    "MY": {"country": "Malaysia", "code": "MYR", "name": "Malaysian ringgit", "symbol": "RM"},
-    "AE": {"country": "United Arab Emirates", "code": "AED", "name": "UAE dirham", "symbol": "د.إ"},
-    "TH": {"country": "Thailand", "code": "THB", "name": "Thai baht", "symbol": "฿"},
-    "KR": {"country": "South Korea", "code": "KRW", "name": "South Korean won", "symbol": "₩"},
-    "AU": {"country": "Australia", "code": "AUD", "name": "Australian dollar", "symbol": "$"},
-    "CA": {"country": "Canada", "code": "CAD", "name": "Canadian dollar", "symbol": "$"},
-    "FR": {"country": "France", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "DE": {"country": "Germany", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "IT": {"country": "Italy", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "ES": {"country": "Spain", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "PT": {"country": "Portugal", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "NL": {"country": "Netherlands", "code": "EUR", "name": "Euro", "symbol": "€"},
-    "CH": {"country": "Switzerland", "code": "CHF", "name": "Swiss franc", "symbol": "CHF"},
-    "ID": {"country": "Indonesia", "code": "IDR", "name": "Indonesian rupiah", "symbol": "Rp"},
-    "VN": {"country": "Vietnam", "code": "VND", "name": "Vietnamese dong", "symbol": "₫"},
-    "LK": {"country": "Sri Lanka", "code": "LKR", "name": "Sri Lankan rupee", "symbol": "Rs"},
-    "NP": {"country": "Nepal", "code": "NPR", "name": "Nepalese rupee", "symbol": "रु"},
-    "BD": {"country": "Bangladesh", "code": "BDT", "name": "Bangladeshi taka", "symbol": "৳"},
-    "CN": {"country": "China", "code": "CNY", "name": "Chinese yuan", "symbol": "¥"},
-    "TR": {"country": "Türkiye", "code": "TRY", "name": "Turkish lira", "symbol": "₺"},
-}
+import requests
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+# Import Qloo recommendation module
+# Ensure qloo_service.py (or your recommendations file) is in the same directory
+from services.qloo_service import get_cultural_recommendations, is_qloo_configured
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("vibetrip-backend")
 
 app = FastAPI(
     title="VibeTrip API",
-    description="An AI-powered travel planner using cultural intelligence.",
+    description="Backend service powering personalized travel recommendations and currency conversions.",
     version="1.0.0",
 )
 
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv(
-        "FRONTEND_URLS",
-        "http://localhost:5173"
-    ).split(",")
-    if origin.strip()
-]
-
+# Enable CORS for frontend development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:8000",
+        "*",  # Adjust to specific domains in production
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def home():
-    return {
-        "message": "Welcome to VibeTrip!",
-        "status": "running",
-    }
+# ============================================================
+# DATA SCHEMAS
+# ============================================================
 
+class PreferencesPayload(BaseModel):
+    starting_location: str = Field(..., min_length=2)
+    destination: str = Field(..., min_length=2)
+    favorite_movies: list[str] = Field(default_factory=list)
+    favorite_artists: list[str] = Field(default_factory=list)
+    favorite_cuisines: list[str] = Field(default_factory=list)
+    interests: list[str] = Field(default_factory=list)
+    budget: float = Field(default=100000.0, ge=1)
+    budget_currency: str = Field(default="INR")
+    duration_days: int = Field(default=3, ge=1, le=30)
+    travel_style: list[str] = Field(default_factory=list)
+    additional_preferences: Optional[str] = None
+
+
+# ============================================================
+# COUNTRY & CURRENCY RESOLVER DICTIONARY
+# ============================================================
+
+LOCATION_TO_CURRENCY: dict[str, dict[str, str]] = {
+    # Asia
+    "india": {"country": "India", "currency_code": "INR", "currency_symbol": "₹"},
+    "japan": {"country": "Japan", "currency_code": "JPY", "currency_symbol": "¥"},
+    "tokyo": {"country": "Japan", "currency_code": "JPY", "currency_symbol": "¥"},
+    "kyoto": {"country": "Japan", "currency_code": "JPY", "currency_symbol": "¥"},
+    "osaka": {"country": "Japan", "currency_code": "JPY", "currency_symbol": "¥"},
+    "singapore": {"country": "Singapore", "currency_code": "SGD", "currency_symbol": "S$"},
+    "malaysia": {"country": "Malaysia", "currency_code": "MYR", "currency_symbol": "RM"},
+    "kuala lumpur": {"country": "Malaysia", "currency_code": "MYR", "currency_symbol": "RM"},
+    "thailand": {"country": "Thailand", "currency_code": "THB", "currency_symbol": "฿"},
+    "bangkok": {"country": "Thailand", "currency_code": "THB", "currency_symbol": "฿"},
+    "uae": {"country": "United Arab Emirates", "currency_code": "AED", "currency_symbol": "AED "},
+    "dubai": {"country": "United Arab Emirates", "currency_code": "AED", "currency_symbol": "AED "},
+    "south korea": {"country": "South Korea", "currency_code": "KRW", "currency_symbol": "₩"},
+    "seoul": {"country": "South Korea", "currency_code": "KRW", "currency_symbol": "₩"},
+    "indonesia": {"country": "Indonesia", "currency_code": "IDR", "currency_symbol": "Rp"},
+    "bali": {"country": "Indonesia", "currency_code": "IDR", "currency_symbol": "Rp"},
+    "vietnam": {"country": "Vietnam", "currency_code": "VND", "currency_symbol": "₫"},
+    "sri lanka": {"country": "Sri Lanka", "currency_code": "LKR", "currency_symbol": "Rs"},
+
+    # Europe
+    "france": {"country": "France", "currency_code": "EUR", "currency_symbol": "€"},
+    "paris": {"country": "France", "currency_code": "EUR", "currency_symbol": "€"},
+    "germany": {"country": "Germany", "currency_code": "EUR", "currency_symbol": "€"},
+    "berlin": {"country": "Germany", "currency_code": "EUR", "currency_symbol": "€"},
+    "italy": {"country": "Italy", "currency_code": "EUR", "currency_symbol": "€"},
+    "rome": {"country": "Italy", "currency_code": "EUR", "currency_symbol": "€"},
+    "spain": {"country": "Spain", "currency_code": "EUR", "currency_symbol": "€"},
+    "barcelona": {"country": "Spain", "currency_code": "EUR", "currency_symbol": "€"},
+    "uk": {"country": "United Kingdom", "currency_code": "GBP", "currency_symbol": "£"},
+    "united kingdom": {"country": "United Kingdom", "currency_code": "GBP", "currency_symbol": "£"},
+    "london": {"country": "United Kingdom", "currency_code": "GBP", "currency_symbol": "£"},
+    "switzerland": {"country": "Switzerland", "currency_code": "CHF", "currency_symbol": "CHF "},
+
+    # Americas & Oceania
+    "usa": {"country": "United States", "currency_code": "USD", "currency_symbol": "$"},
+    "united states": {"country": "United States", "currency_code": "USD", "currency_symbol": "$"},
+    "new york": {"country": "United States", "currency_code": "USD", "currency_symbol": "$"},
+    "california": {"country": "United States", "currency_code": "USD", "currency_symbol": "$"},
+    "canada": {"country": "Canada", "currency_code": "CAD", "currency_symbol": "C$"},
+    "australia": {"country": "Australia", "currency_code": "AUD", "currency_symbol": "A$"},
+    "sydney": {"country": "Australia", "currency_code": "AUD", "currency_symbol": "A$"},
+}
+
+# Offline fallback matrix relative to 1 USD
+BASE_RATES_TO_USD: dict[str, float] = {
+    "USD": 1.0,
+    "INR": 86.5,
+    "JPY": 152.0,
+    "EUR": 0.92,
+    "GBP": 0.79,
+    "SGD": 1.34,
+    "MYR": 4.45,
+    "AED": 3.67,
+    "AUD": 1.54,
+    "CAD": 1.40,
+    "THB": 34.2,
+    "KRW": 1390.0,
+}
+
+
+# ============================================================
+# ENDPOINTS
+# ============================================================
 
 @app.get("/health")
-def health_check():
+def health_check() -> dict[str, Any]:
     return {
         "status": "healthy",
-        "application": "VibeTrip",
-    }
-
-
-@app.post("/preferences")
-def create_preferences(preferences: TravelPreferences):
-    return {
-        "message": "Travel preferences received successfully!",
-        "preferences": preferences.model_dump(),
+        "qloo_configured": is_qloo_configured(),
     }
 
 
 @app.post("/recommendations")
-def create_recommendations(preferences: TravelPreferences):
-    """
-    Generate cultural place recommendations using Qloo.
-    """
+def get_recommendations(payload: PreferencesPayload) -> dict[str, Any]:
+    """Retrieve cultural and location recommendations via Qloo."""
     try:
-        result = get_cultural_recommendations(
-            preferences.model_dump()
+        preferences_dict = payload.model_dump()
+        result = get_cultural_recommendations(preferences_dict)
+        return result
+    except RuntimeError as exc:
+        logger.error("Recommendation runtime error: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected error during recommendation generation: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate recommendations. Please try again.",
         )
 
-        return {
-            "message": result["message"],
-            "source": result["source"],
-            "preferences": preferences.model_dump(),
-            "recommendations": result["recommendations"],
-        }
-
-    except requests.RequestException as error:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Unable to retrieve recommendations from Qloo. "
-                "Please try again later."
-            ),
-        ) from error
-
-    except RuntimeError as error:
-        raise HTTPException(
-            status_code=503,
-            detail=str(error),
-        ) from error
 
 @app.get("/currency/resolve")
-def resolve_currency(location: str):
-    """Identify a location's country and resolve its currency."""
+def resolve_currency(location: str = Query(..., min_length=2)) -> dict[str, str]:
+    """Resolve a destination city or country name into its ISO currency code."""
+    query = location.strip().lower()
 
-    location = location.strip()
+    # Exact or substring lookup
+    for key, data in LOCATION_TO_CURRENCY.items():
+        if key in query:
+            return data
 
-    if len(location) < 2:
-        raise HTTPException(status_code=422, detail="Enter a valid location.")
-
-    try:
-        response = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": location,
-                "format": "jsonv2",
-                "addressdetails": 1,
-                "limit": 1,
-            },
-            headers={"User-Agent": "VibeTrip/1.0 travel-planning-app"},
-            timeout=10,
-        )
-        response.raise_for_status()
-        results = response.json()
-
-    except requests.RequestException as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Location lookup is temporarily unavailable.",
-        ) from error
-
-    if not results:
-        raise HTTPException(
-            status_code=404,
-            detail="Location not found. Include the country name and try again.",
-        )
-
-    address = results[0].get("address", {})
-    country_code = address.get("country_code", "").upper()
-    country_name = address.get("country", "")
-
-    currency = COUNTRY_CURRENCIES.get(country_code)
-
-    if not currency:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Currency mapping is not available for {country_name or country_code}. Please select your currency manually.",
-        )
-
+    # Default fallback if unknown destination
     return {
-        "location": location,
-        "country": country_name or currency["country"],
-        "country_code": country_code,
-        "currency_code": currency["code"],
-        "currency_name": currency["name"],
-        "currency_symbol": currency["symbol"],
+        "country": location.strip().title(),
+        "currency_code": "USD",
+        "currency_symbol": "$",
     }
-
 
 
 @app.get("/currency/rate")
-def get_currency_rate(base: str, quote: str):
-    """
-    Return the latest available reference exchange rate.
-    Example: /currency/rate?base=INR&quote=JPY
-    """
-    base = base.strip().upper()
-    quote = quote.strip().upper()
+def get_exchange_rate(
+    base: str = Query(..., min_length=3, max_length=3),
+    quote: str = Query(..., min_length=3, max_length=3),
+) -> dict[str, Any]:
+    """Retrieve live or cached exchange rates between base and quote currencies."""
+    base_code = base.upper().strip()
+    quote_code = quote.upper().strip()
 
-    if not re.fullmatch(r"[A-Z]{3}", base):
-        raise HTTPException(
-            status_code=422,
-            detail="Base currency must be a three-letter currency code."
-        )
-
-    if not re.fullmatch(r"[A-Z]{3}", quote):
-        raise HTTPException(
-            status_code=422,
-            detail="Target currency must be a three-letter currency code."
-        )
-
-    if base == quote:
+    if base_code == quote_code:
         return {
-            "base": base,
-            "quote": quote,
+            "base": base_code,
+            "quote": quote_code,
             "rate": 1.0,
-            "date": date.today().isoformat(),
-            "same_currency": True,
+            "date": "live",
         }
 
+    # Attempt live rate lookup from open public endpoint
     try:
-        response = requests.get(
-            f"https://api.frankfurter.dev/v2/rate/{base}/{quote}",
-            timeout=8,
-        )
+        url = f"https://open.er-api.com/v6/latest/{base_code}"
+        res = requests.get(url, timeout=(3, 5))
+        if res.status_code == 200:
+            data = res.json()
+            rates = data.get("rates", {})
+            if quote_code in rates:
+                return {
+                    "base": base_code,
+                    "quote": quote_code,
+                    "rate": float(rates[quote_code]),
+                    "date": data.get("time_last_update_utc", "recently")[:16],
+                }
+    except Exception as exc:
+        logger.warning("External exchange rate lookup failed (%s); using fallback matrix.", exc)
 
-        if response.status_code == 404:
-            raise HTTPException(
-                status_code=422,
-                detail=f"No reference exchange rate is available for {base} to {quote}."
-            )
+    # Fallback to local reference matrix
+    if base_code in BASE_RATES_TO_USD and quote_code in BASE_RATES_TO_USD:
+        usd_to_base = BASE_RATES_TO_USD[base_code]
+        usd_to_quote = BASE_RATES_TO_USD[quote_code]
+        cross_rate = usd_to_quote / usd_to_base
 
-        response.raise_for_status()
-        data = response.json()
+        return {
+            "base": base_code,
+            "quote": quote_code,
+            "rate": round(cross_rate, 4),
+            "date": "reference estimate",
+        }
 
-    except requests.RequestException as error:
-        raise HTTPException(
-            status_code=503,
-            detail="Exchange rates are temporarily unavailable."
-        ) from error
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unable to convert from {base_code} to {quote_code}.",
+    )
 
-    return {
-        "base": data["base"],
-        "quote": data["quote"],
-        "rate": data["rate"],
-        "date": data["date"],
-        "same_currency": False,
-    }
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
