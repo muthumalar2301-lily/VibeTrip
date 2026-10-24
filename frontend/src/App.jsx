@@ -574,9 +574,7 @@ function createInitialBudget(preferences) {
     preferences.destination,
     preferences.travel_style || [],
   );
-
   const dailyCosts = getDailyReferenceCosts(currency, tier);
-
   const duration = Math.max(1, Number(preferences.duration_days) || 1);
 
   return {
@@ -610,6 +608,12 @@ function App() {
   const [includeIntercityTransport, setIncludeIntercityTransport] =
     useState(true);
 
+  const [destinationCurrency, setDestinationCurrency] = useState(null);
+  const [currencyLookupStatus, setCurrencyLookupStatus] = useState("idle");
+  const [exchangeRateInfo, setExchangeRateInfo] = useState(null);
+  const [exchangeRateStatus, setExchangeRateStatus] = useState("idle");
+  const [currencyConversionError, setCurrencyConversionError] = useState("");
+
   const [savedTrips, setSavedTrips] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("vibetrip-saved-trips") || "[]");
@@ -623,6 +627,89 @@ function App() {
   }, [savedTrips]);
 
   const currency = preferences.budget_currency || "INR";
+
+  // Resolve the destination's local currency through the backend.
+  useEffect(() => {
+    const destination = preferences.destination.trim();
+
+    if (destination.length < 2) {
+      setDestinationCurrency(null);
+      setCurrencyLookupStatus("idle");
+      setExchangeRateInfo(null);
+      setExchangeRateStatus("idle");
+      setCurrencyConversionError("");
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(async () => {
+      setCurrencyLookupStatus("loading");
+      setCurrencyConversionError("");
+
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/currency/resolve?location=${encodeURIComponent(destination)}`,
+          { signal: controller.signal },
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || "Could not identify the destination currency.");
+        }
+
+        setDestinationCurrency(data);
+        setCurrencyLookupStatus("success");
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        setDestinationCurrency(null);
+        setCurrencyLookupStatus("error");
+        setExchangeRateInfo(null);
+        setCurrencyConversionError(error.message || "Destination currency lookup failed.");
+      }
+    }, 500);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [preferences.destination]);
+
+  // Retrieve a reference exchange rate when either currency changes.
+  useEffect(() => {
+    if (!destinationCurrency?.currency_code) return undefined;
+
+    const quoteCurrency = destinationCurrency.currency_code;
+    const controller = new AbortController();
+
+    async function loadExchangeRate() {
+      setExchangeRateStatus("loading");
+      setCurrencyConversionError("");
+
+      try {
+        const query = new URLSearchParams({ base: currency, quote: quoteCurrency });
+        const response = await fetch(
+          `${API_BASE_URL}/currency/rate?${query.toString()}`,
+          { signal: controller.signal },
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || "Could not retrieve the exchange rate.");
+        }
+
+        setExchangeRateInfo(data);
+        setExchangeRateStatus("success");
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        setExchangeRateInfo(null);
+        setExchangeRateStatus("error");
+        setCurrencyConversionError(error.message || "Exchange-rate lookup failed.");
+      }
+    }
+
+    loadExchangeRate();
+    return () => controller.abort();
+  }, [currency, destinationCurrency?.currency_code]);
 
   const internationalRoute = useMemo(
     () =>
@@ -1207,9 +1294,9 @@ function App() {
                   </select>
 
                   <small>
-                    Changing this selector changes the displayed denomination
-                    and planning assumptions. It does not perform a live
-                    exchange-rate conversion of your budget.
+                    This is the currency you use to plan your total budget.
+                    VibeTrip also looks up the destination's currency and shows
+                    an estimated equivalent using the latest available reference rate.
                   </small>
                 </label>
 
@@ -1230,6 +1317,53 @@ function App() {
                     required
                   />
                 </label>
+              </div>
+
+              <div
+                className="currency-conversion-card"
+                role="status"
+                style={{
+                  marginTop: "16px",
+                  padding: "16px 18px",
+                  border: "1px solid #dbe3ef",
+                  borderRadius: "14px",
+                  background: "#f8fafc",
+                }}
+              >
+                <h3 style={{ margin: "0 0 8px" }}>💱 Destination currency conversion</h3>
+                {currencyLookupStatus === "idle" && (
+                  <p style={{ margin: 0 }}>Enter a destination to see its local currency and an estimated budget conversion.</p>
+                )}
+                {currencyLookupStatus === "loading" && (
+                  <p style={{ margin: 0 }}>Identifying the destination's local currency…</p>
+                )}
+                {currencyLookupStatus === "success" && destinationCurrency && (
+                  <>
+                    <p style={{ margin: "0 0 8px" }}>
+                      Destination: <strong>{destinationCurrency.country}</strong> · Local currency: <strong>{destinationCurrency.currency_code} ({destinationCurrency.currency_symbol})</strong>
+                    </p>
+                    {exchangeRateStatus === "loading" && <p style={{ margin: 0 }}>Loading the latest available reference exchange rate…</p>}
+                    {exchangeRateStatus === "success" && exchangeRateInfo && (
+                      <>
+                        <p style={{ margin: "0 0 6px", fontSize: "1.08rem" }}>
+                          <strong>{formatMoney(Number(preferences.budget) || 0, currency)}</strong> ≈ <strong>{formatMoney((Number(preferences.budget) || 0) * exchangeRateInfo.rate, destinationCurrency.currency_code)}</strong>
+                        </p>
+                        <p style={{ margin: 0, fontSize: "0.88rem", color: "#475569" }}>
+                          1 {exchangeRateInfo.base} = {Number(exchangeRateInfo.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} {exchangeRateInfo.quote} · Rate date: {exchangeRateInfo.date}
+                        </p>
+                      </>
+                    )}
+                    {exchangeRateStatus === "error" && <p style={{ margin: 0, color: "#b91c1c" }}>{currencyConversionError || "Exchange rate unavailable. You can still continue planning."}</p>}
+                  </>
+                )}
+                {currencyLookupStatus === "error" && (
+                  <p style={{ margin: 0, color: "#b91c1c" }}>
+                    {currencyConversionError || "Could not identify the destination currency."} You can still select your budget currency manually.
+                  </p>
+                )}
+                <small style={{ display: "block", marginTop: "10px", color: "#64748b" }}>
+                  Reference conversion only—not a bank, card, or cash-exchange quote. Actual rates and fees may differ.
+                </small>
               </div>
 
               <div className="form-section">
@@ -1710,6 +1844,66 @@ function App() {
               They are not live hotel, restaurant, ticket, or flight prices.
               Enter real quotes before relying on the result.
             </p>
+          </div>
+
+          <div
+            className="currency-conversion-card budget-currency-conversion-card"
+            role="status"
+            style={{
+              marginTop: "16px",
+              marginBottom: "20px",
+              padding: "16px 18px",
+              border: "1px solid #dbe3ef",
+              borderRadius: "14px",
+              background: "#f8fafc",
+            }}
+          >
+            <h3 style={{ margin: "0 0 8px" }}>💱 Budget currency converter</h3>
+            <p style={{ margin: "0 0 10px" }}>
+              Convert your available trip budget from {currency} to the destination's local currency.
+            </p>
+
+            {currencyLookupStatus === "idle" && (
+              <p style={{ margin: 0 }}>Enter a destination in your trip preferences to identify its local currency.</p>
+            )}
+            {currencyLookupStatus === "loading" && (
+              <p style={{ margin: 0 }}>Identifying the destination's local currency…</p>
+            )}
+            {currencyLookupStatus === "success" && destinationCurrency && (
+              <>
+                <p style={{ margin: "0 0 8px" }}>
+                  Destination: <strong>{destinationCurrency.country}</strong> · Local currency: <strong>{destinationCurrency.currency_code} ({destinationCurrency.currency_symbol})</strong>
+                </p>
+                {exchangeRateStatus === "loading" && (
+                  <p style={{ margin: 0 }}>Loading the latest available reference exchange rate…</p>
+                )}
+                {exchangeRateStatus === "success" && exchangeRateInfo && (
+                  <>
+                    <p style={{ margin: "0 0 6px", fontSize: "1.08rem" }}>
+                      <strong>{formatMoney(Number(preferences.budget) || 0, currency)}</strong>
+                      {" "}≈{" "}
+                      <strong>{formatMoney((Number(preferences.budget) || 0) * exchangeRateInfo.rate, destinationCurrency.currency_code)}</strong>
+                    </p>
+                    <p style={{ margin: 0, fontSize: "0.88rem", color: "#475569" }}>
+                      1 {exchangeRateInfo.base} = {Number(exchangeRateInfo.rate).toLocaleString(undefined, { maximumFractionDigits: 6 })} {exchangeRateInfo.quote} · Rate date: {exchangeRateInfo.date}
+                    </p>
+                  </>
+                )}
+                {exchangeRateStatus === "error" && (
+                  <p style={{ margin: 0, color: "#b91c1c" }}>
+                    {currencyConversionError || "Exchange rate unavailable. You can still continue planning."}
+                  </p>
+                )}
+              </>
+            )}
+            {currencyLookupStatus === "error" && (
+              <p style={{ margin: 0, color: "#b91c1c" }}>
+                {currencyConversionError || "Could not identify the destination currency."} You can still select your budget currency manually.
+              </p>
+            )}
+            <small style={{ display: "block", marginTop: "10px", color: "#64748b" }}>
+              Reference conversion only—not a bank, card, or cash-exchange quote. Actual rates and fees may differ.
+            </small>
           </div>
 
           {internationalRoute === true && (
