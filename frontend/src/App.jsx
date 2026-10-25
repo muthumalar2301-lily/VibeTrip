@@ -112,6 +112,12 @@ const DAILY_REFERENCE_COSTS = {
   },
 };
 
+const TRAVEL_STYLE_TIERS = [
+  { id: "budget", label: "Backpacker / Frugal", factor: "budget", icon: "🎒" },
+  { id: "moderate", label: "Balanced Explorer", factor: "moderate", icon: "☕" },
+  { id: "comfortable", label: "Comfort & Indulgence", factor: "comfortable", icon: "✨" },
+];
+
 function getCurrencySymbol(currencyCode) {
   return CURRENCY_OPTIONS.find((c) => c.code === currencyCode)?.symbol || `${currencyCode} `;
 }
@@ -270,7 +276,9 @@ function createInitialBudget(preferences) {
 }
 
 export default function App() {
-  const [currentStep, setCurrentStep] = useState(1);
+  // Step 0 = Compact Landing/Title screen, 1 = Preferences, 2 = Select Places, 3 = Itinerary, 4 = Budget
+  const [currentStep, setCurrentStep] = useState(0);
+
   const [preferences, setPreferences] = useState(INITIAL_PREFERENCES);
   const [recommendations, setRecommendations] = useState([]);
   const [selectedRecommendations, setSelectedRecommendations] = useState([]);
@@ -285,6 +293,9 @@ export default function App() {
   const [budgetItems, setBudgetItems] = useState(() => createInitialBudget(INITIAL_PREFERENCES));
   const [emergencyPercent, setEmergencyPercent] = useState(10);
   const [includeIntercityTransport, setIncludeIntercityTransport] = useState(true);
+  const [tripSavedSuccessfully, setTripSavedSuccessfully] = useState(false);
+
+  const [budgetTierIndex, setBudgetTierIndex] = useState(1);
 
   const [destinationCurrency, setDestinationCurrency] = useState(null);
   const [currencyLookupStatus, setCurrencyLookupStatus] = useState("idle");
@@ -300,6 +311,7 @@ export default function App() {
   });
 
   const [showSavedModal, setShowSavedModal] = useState(false);
+  const [expandedSavedTripId, setExpandedSavedTripId] = useState(null);
 
   useEffect(() => {
     localStorage.setItem("vibetrip-saved-trips", JSON.stringify(savedTrips));
@@ -472,6 +484,20 @@ export default function App() {
     };
   }, [preferences.budget, budgetItems, emergencyPercent, includeIntercityTransport]);
 
+  function resetToHome() {
+    setPreferences(INITIAL_PREFERENCES);
+    setRecommendations([]);
+    setSelectedRecommendations([]);
+    setItinerary([]);
+    setItineraryGenerated(false);
+    setBudgetItems(createInitialBudget(INITIAL_PREFERENCES));
+    setTripSavedSuccessfully(false);
+    setError("");
+    setResultMessage("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    setCurrentStep(0);
+  }
+
   function updatePreference(name, value) {
     setPreferences((prev) => ({ ...prev, [name]: value }));
   }
@@ -512,6 +538,24 @@ export default function App() {
     });
   }
 
+  function applyTravelStylePreset(tierIndex) {
+    const selectedTier = TRAVEL_STYLE_TIERS[tierIndex].factor;
+    setBudgetTierIndex(tierIndex);
+
+    const duration = Math.max(1, Number(preferences.duration_days) || 1);
+    const costTable = DAILY_REFERENCE_COSTS[currency] || DAILY_REFERENCE_COSTS.INR;
+    const targetCosts = costTable[selectedTier] || costTable.moderate;
+
+    setBudgetItems((prev) => ({
+      ...prev,
+      accommodation: String(targetCosts.accommodation * duration),
+      food: String(targetCosts.food * duration),
+      localTransport: String(targetCosts.localTransport * duration),
+      attractions: String(targetCosts.attractions * duration),
+      shopping: String(targetCosts.shopping * duration),
+    }));
+  }
+
   function updateBudgetItem(category, value) {
     if (value !== "" && Number(value) < 0) return;
     setBudgetItems((prev) => ({ ...prev, [category]: value }));
@@ -521,6 +565,7 @@ export default function App() {
     setBudgetItems(createInitialBudget(preferences));
     setEmergencyPercent(10);
     setIncludeIntercityTransport(true);
+    setBudgetTierIndex(1);
   }
 
   async function handleSubmit(event) {
@@ -531,6 +576,7 @@ export default function App() {
     setSelectedRecommendations([]);
     setItinerary([]);
     setItineraryGenerated(false);
+    setTripSavedSuccessfully(false);
     setLoading(true);
 
     try {
@@ -615,14 +661,16 @@ export default function App() {
       places: selectedRecommendations,
       itinerary,
       budgetItems,
+      travel_style: preferences.travel_style,
     };
 
     setSavedTrips((prev) => [trip, ...prev]);
+    setTripSavedSuccessfully(true);
     setError("");
     setResultMessage("Trip saved to your local storage!");
   }
 
-  function loadTrip(trip) {
+  function loadTripForEditing(trip) {
     setPreferences((prev) => ({
       ...prev,
       starting_location: trip.starting_location || "",
@@ -630,12 +678,15 @@ export default function App() {
       duration_days: trip.duration_days || 1,
       budget: trip.budget || 0,
       budget_currency: trip.budget_currency || "INR",
+      travel_style: trip.travel_style || [],
     }));
     setSelectedRecommendations(trip.places || []);
     setItinerary(trip.itinerary || []);
     setItineraryGenerated(Boolean(trip.itinerary?.length));
     if (trip.budgetItems) setBudgetItems(trip.budgetItems);
     setShowSavedModal(false);
+    setTripSavedSuccessfully(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
     setCurrentStep(3);
   }
 
@@ -652,8 +703,9 @@ export default function App() {
     return `https://www.google.com/maps/search/?api=1&query=${query}`;
   }
 
-  function openFullRoute() {
-    const places = orderByProximity(selectedRecommendations);
+  function openFullRoute(placesList) {
+    const targetPlaces = placesList || selectedRecommendations;
+    const places = orderByProximity(targetPlaces);
     if (places.length === 0) {
       setError("Select places before generating a route.");
       return;
@@ -678,36 +730,57 @@ export default function App() {
 
   return (
     <main className="app-container">
-      {/* Brand Header & Stepper */}
+      {/* Brand Header */}
       <header className="app-header">
-        <div className="brand">
+        <div
+          className="brand"
+          onClick={resetToHome}
+          style={{ cursor: "pointer" }}
+          title="Return to Home Screen"
+        >
           <span className="brand-icon">✈️</span>
           <div>
             <h1>VibeTrip</h1>
-            <p>Don't just travel. Travel your vibe.</p>
+            <p>Curated by your culture. Planned for your reality.</p>
           </div>
         </div>
 
-        <div className="step-indicator">
-          {STEPS.map((step) => (
-            <div
-              key={step.id}
-              className={`step-item ${currentStep === step.id ? "active" : ""} ${currentStep > step.id ? "completed" : ""}`}
-            >
-              <div className="step-circle">{currentStep > step.id ? "✓" : step.id}</div>
-              <span className="step-label">{step.title}</span>
-            </div>
-          ))}
-        </div>
+        {/* Wizard Stepper appears only inside Steps 1 to 4 */}
+        {currentStep > 0 && (
+          <div className="step-indicator">
+            {STEPS.map((step) => (
+              <div
+                key={step.id}
+                className={`step-item ${currentStep === step.id ? "active" : ""} ${currentStep > step.id ? "completed" : ""}`}
+              >
+                <div className="step-circle">{currentStep > step.id ? "✓" : step.id}</div>
+                <span className="step-label">{step.title}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => setShowSavedModal(true)}
-          style={{ padding: "0.5rem 0.9rem", fontSize: "0.85rem" }}
-        >
-          Saved Trips ({savedTrips.length})
-        </button>
+        <div className="header-actions">
+          {currentStep > 0 && (
+            <button
+              type="button"
+              className="home-nav-button"
+              onClick={resetToHome}
+              title="Return to home screen"
+            >
+              🏠 Home
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setShowSavedModal(true)}
+            style={{ padding: "0.5rem 0.9rem", fontSize: "0.85rem" }}
+          >
+            Saved Trips ({savedTrips.length})
+          </button>
+        </div>
       </header>
 
       {/* Global Alerts */}
@@ -724,6 +797,52 @@ export default function App() {
             ×
           </button>
         </div>
+      )}
+
+      {/* ================= STEP 0: COMPACT TITLE / HERO SCREEN ================= */}
+      {currentStep === 0 && (
+        <section className="title-landing-compact">
+          <div className="landing-badge">AI + CULTURAL KNOWLEDGE GRAPH</div>
+
+          <h1 className="landing-title-compact">
+            Curated by your culture.<br />
+            <span>Planned for your reality.</span>
+          </h1>
+
+          <p className="landing-subtitle-compact">
+            Skip generic top-ten lists. VibeTrip turns your tastes in cinema, music, and food into proximity-clustered itineraries and real-world multi-currency budgets.
+          </p>
+
+          <div className="landing-pills-row">
+            <span className="vibe-pill">🎬 Cinema & Aesthetics</span>
+            <span className="vibe-pill">🎵 Music & Artists</span>
+            <span className="vibe-pill">🍜 Food Culture</span>
+            <span className="vibe-pill">🗺️ Proximity Routing</span>
+            <span className="vibe-pill">💱 Dual-Currency Budget</span>
+          </div>
+
+          <div className="landing-actions-compact">
+            <button
+              type="button"
+              className="primary-button landing-cta-button"
+              onClick={() => {
+                window.scrollTo({ top: 0, behavior: "smooth" });
+                setCurrentStep(1);
+              }}
+            >
+              Curate My Journey →
+            </button>
+            {savedTrips.length > 0 && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowSavedModal(true)}
+              >
+                Saved Journeys ({savedTrips.length})
+              </button>
+            )}
+          </div>
+        </section>
       )}
 
       {/* ================= STEP 1: PREFERENCES ================= */}
@@ -917,9 +1036,14 @@ export default function App() {
               </label>
             </div>
 
-            <button type="submit" className="primary-button full-width" disabled={loading}>
-              {loading ? "Finding recommendations..." : "Find My Vibe Spots →"}
-            </button>
+            <div className="step-navigation-bar">
+              <button type="button" className="secondary-button" onClick={resetToHome}>
+                ← Cancel & Go Home
+              </button>
+              <button type="submit" className="primary-button" disabled={loading}>
+                {loading ? "Finding recommendations..." : "Find My Vibe Spots →"}
+              </button>
+            </div>
           </form>
         </section>
       )}
@@ -985,7 +1109,7 @@ export default function App() {
           </div>
 
           <div className="trip-actions">
-            <button type="button" className="secondary-button" onClick={openFullRoute}>
+            <button type="button" className="secondary-button" onClick={() => openFullRoute()}>
               Open Full Route in Google Maps ↗
             </button>
           </div>
@@ -1058,6 +1182,32 @@ export default function App() {
             <p>Compare costs in both your home and destination currencies.</p>
           </div>
 
+          {/* Post-Save Confirmation Banner */}
+          {tripSavedSuccessfully && (
+            <div className="trip-saved-banner">
+              <div>
+                <h3>🎉 Your trip has been saved!</h3>
+                <p>This journey is safely stored in your browser. What would you like to do next?</p>
+              </div>
+              <div className="trip-saved-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={resetToHome}
+                >
+                  🏠 Plan Another Trip (Home)
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setShowSavedModal(true)}
+                >
+                  View Saved Trips
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Cost of Living Banner */}
           {costOfLivingComparison && (
             <div className="cost-of-living-banner">
@@ -1072,6 +1222,41 @@ export default function App() {
               </span>
             </div>
           )}
+
+          {/* Travel Style Slider Widget */}
+          <div className="travel-style-slider-card">
+            <div className="slider-header">
+              <div>
+                <span className="slider-eyebrow">TRAVEL STYLE ADJUSTER</span>
+                <h4>{TRAVEL_STYLE_TIERS[budgetTierIndex].icon} {TRAVEL_STYLE_TIERS[budgetTierIndex].label}</h4>
+              </div>
+              <span className="slider-hint">Slide to recalibrate daily estimates</span>
+            </div>
+
+            <div className="slider-track-wrapper">
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="1"
+                value={budgetTierIndex}
+                onChange={(e) => applyTravelStylePreset(Number(e.target.value))}
+                className="travel-style-range-input"
+              />
+              <div className="slider-ticks">
+                {TRAVEL_STYLE_TIERS.map((tier, idx) => (
+                  <button
+                    key={tier.id}
+                    type="button"
+                    className={`slider-tick-btn ${budgetTierIndex === idx ? "active" : ""}`}
+                    onClick={() => applyTravelStylePreset(idx)}
+                  >
+                    {tier.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {/* Dual Currency Overview Cards */}
           <div className="budget-overview">
@@ -1178,7 +1363,6 @@ export default function App() {
                         />
                       </label>
 
-                      {/* Real-time local currency conversion pill */}
                       {convertedDestAmount !== null && destCurrencyCode && destCurrencyCode !== currency && (
                         <div className="converted-pill">
                           ≈ {formatMoney(convertedDestAmount, destCurrencyCode)}
@@ -1238,101 +1422,142 @@ export default function App() {
             >
               ← Back to Itinerary
             </button>
-            <button type="button" className="primary-button" onClick={saveCurrentTrip}>
-              Save Trip Plan 💾
-            </button>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <button type="button" className="secondary-button" onClick={resetToHome}>
+                🏠 Home
+              </button>
+              <button type="button" className="primary-button" onClick={saveCurrentTrip}>
+                Save Trip Plan 💾
+              </button>
+            </div>
           </div>
         </section>
       )}
 
-      {/* Saved Trips Drawer / Modal */}
+      {/* ================= SAVED TRIPS DRAWER / MODAL ================= */}
       {showSavedModal && (
-        <div style={{
-          position: "fixed",
-          inset: 0,
-          backgroundColor: "rgba(15, 23, 42, 0.6)",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          zIndex: 100,
-          padding: "1rem"
-        }}>
-          <div style={{
-            background: "#fff",
-            borderRadius: "16px",
-            maxWidth: "500px",
-            width: "100%",
-            maxHeight: "80vh",
-            overflowY: "auto",
-            padding: "1.5rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem"
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>Saved Trips</h3>
+        <div className="modal-backdrop">
+          <div className="saved-trips-modal">
+            <div className="modal-header">
+              <div>
+                <h3>My Saved Journeys</h3>
+                <p>Manage, inspect, and customize previously saved itineraries.</p>
+              </div>
               <button
                 type="button"
+                className="close-modal-btn"
                 onClick={() => setShowSavedModal(false)}
-                style={{ background: "none", border: "none", fontSize: "1.2rem", cursor: "pointer" }}
               >
                 ✕
               </button>
             </div>
 
-            {savedTrips.length === 0 ? (
-              <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>No saved trips found.</p>
-            ) : (
-              savedTrips.map((trip) => (
-                <div
-                  key={trip.id}
-                  style={{
-                    padding: "0.85rem",
-                    border: "1px solid var(--border-color)",
-                    borderRadius: "8px",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center"
-                  }}
-                >
-                  <div>
-                    <h4 style={{ margin: "0 0 4px" }}>{trip.destination}</h4>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      {trip.duration_days} days · {trip.places?.length || 0} spots
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <button
-                      type="button"
-                      className="primary-button"
-                      style={{ padding: "0.4rem 0.75rem", fontSize: "0.8rem" }}
-                      onClick={() => loadTrip(trip)}
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      style={{ padding: "0.4rem 0.6rem", fontSize: "0.8rem" }}
-                      onClick={() => deleteSavedTrip(trip.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
+            <div className="modal-body">
+              {savedTrips.length === 0 ? (
+                <div className="empty-state compact">
+                  <span style={{ fontSize: "2.5rem" }}>🧳</span>
+                  <p>You haven't saved any trips yet. Curate your first journey to see it here!</p>
                 </div>
-              ))
-            )}
+              ) : (
+                <div className="saved-trips-accordion">
+                  {savedTrips.map((trip) => {
+                    const isExpanded = expandedSavedTripId === trip.id;
+
+                    return (
+                      <div key={trip.id} className="saved-trip-item-card">
+                        <div className="saved-trip-item-header">
+                          <div>
+                            <h4>{trip.destination}</h4>
+                            <span className="saved-trip-meta">
+                              {trip.starting_location ? `${trip.starting_location} → ` : ""}{trip.destination} · {trip.duration_days} days · {trip.places?.length || 0} spots · {formatMoney(trip.budget, trip.budget_currency || "INR")}
+                            </span>
+                          </div>
+                          <div className="saved-trip-header-buttons">
+                            <button
+                              type="button"
+                              className="secondary-button btn-small"
+                              onClick={() => setExpandedSavedTripId(isExpanded ? null : trip.id)}
+                            >
+                              {isExpanded ? "Hide Plan ▲" : "View Plan ▼"}
+                            </button>
+                            <button
+                              type="button"
+                              className="primary-button btn-small"
+                              onClick={() => loadTripForEditing(trip)}
+                            >
+                              ✏️ Edit & Customize
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button btn-small btn-danger"
+                              onClick={() => deleteSavedTrip(trip.id)}
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Collapsible Itinerary Route Breakdown */}
+                        {isExpanded && (
+                          <div className="saved-trip-details-expanded">
+                            <h5>Daily Plan & Route</h5>
+                            {trip.itinerary && trip.itinerary.length > 0 ? (
+                              <div className="saved-trip-itinerary-preview">
+                                {trip.itinerary.map((day) => (
+                                  <div key={day.day} className="saved-trip-day-preview">
+                                    <strong>Day {day.day}:</strong>
+                                    {day.places && day.places.length > 0 ? (
+                                      <span>
+                                        {day.places.map((p) => p.name).join(" → ")}
+                                      </span>
+                                    ) : (
+                                      <em>No places assigned</em>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="no-plan-text">No route generated for this trip.</p>
+                            )}
+
+                            <div className="saved-trip-bottom-links">
+                              <button
+                                type="button"
+                                className="link-button"
+                                onClick={() => openFullRoute(trip.places)}
+                              >
+                                Open Full Route in Google Maps ↗
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowSavedModal(false)}
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Footer */}
       <footer className="app-footer">
-        <div className="footer-brand">
+        <div className="footer-brand" onClick={resetToHome} style={{ cursor: "pointer" }}>
           <span>✈️</span>
           <strong>VibeTrip</strong>
         </div>
-        <p>Discover your culture. Explore your world. Travel your vibe.</p>
+        <p>Curated by your culture. Planned for your reality.</p>
       </footer>
     </main>
   );
