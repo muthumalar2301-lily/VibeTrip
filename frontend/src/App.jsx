@@ -39,6 +39,8 @@ const TRAVEL_STYLE_OPTIONS = [
 
 const CURRENCY_OPTIONS = [
   { code: "INR", label: "INR — Indian Rupee", symbol: "₹" },
+  { code: "CNY", label: "CNY — Chinese Yuan", symbol: "¥" },
+  { code: "RUB", label: "RUB — Russian Ruble", symbol: "₽" },
   { code: "USD", label: "USD — US Dollar", symbol: "$" },
   { code: "JPY", label: "JPY — Japanese Yen", symbol: "¥" },
   { code: "SGD", label: "SGD — Singapore Dollar", symbol: "S$" },
@@ -64,6 +66,16 @@ const DAILY_REFERENCE_COSTS = {
     budget: { accommodation: 1800, food: 900, localTransport: 500, attractions: 700, shopping: 400 },
     moderate: { accommodation: 4500, food: 1800, localTransport: 900, attractions: 1500, shopping: 800 },
     comfortable: { accommodation: 9000, food: 3500, localTransport: 2000, attractions: 3000, shopping: 1800 },
+  },
+  CNY: {
+    budget: { accommodation: 180, food: 80, localTransport: 25, attractions: 60, shopping: 40 },
+    moderate: { accommodation: 450, food: 200, localTransport: 60, attractions: 150, shopping: 100 },
+    comfortable: { accommodation: 1100, food: 450, localTransport: 150, attractions: 350, shopping: 250 },
+  },
+  RUB: {
+    budget: { accommodation: 2200, food: 1200, localTransport: 300, attractions: 800, shopping: 500 },
+    moderate: { accommodation: 5500, food: 2500, localTransport: 700, attractions: 1800, shopping: 1200 },
+    comfortable: { accommodation: 14000, food: 5500, localTransport: 1800, attractions: 4000, shopping: 2500 },
   },
   USD: {
     budget: { accommodation: 30, food: 18, localTransport: 8, attractions: 12, shopping: 8 },
